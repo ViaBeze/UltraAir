@@ -1,0 +1,18 @@
+[Unit]
+Description=Ryadom verified database and audio backup
+After=ryadom-api.service
+
+[Service]
+Type=oneshot
+User=ryadom
+Group=ryadom
+WorkingDirectory=/opt/ryadom/api/current
+EnvironmentFile=/etc/ryadom/api.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/ryadom/api/venv/bin/python -m backend.manage backup
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ryadom /var/backups/ryadom

@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.venv/
+.idea/
+.design/
+.env*
+!.env.example
+playwright-report/
+test-results/
+*.tsbuildinfo
+.DS_Store
+.backend-venv/
+.local-data/
+.test-data/
+__pycache__/
+.pytest_cache/
+*.sqlite3*

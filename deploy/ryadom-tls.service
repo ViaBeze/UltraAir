@@ -1,0 +1,9 @@
+[Unit]
+Description=Enable HTTPS for ryadomhelp.online after its DNS records are updated
+Wants=network-online.target
+After=network-online.target nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ryadom/ryadom-enable-tls.sh
+TimeoutStartSec=180

@@ -1,0 +1,58 @@
+import { test, expect } from '@playwright/test';
+import type { Browser, BrowserContext, Page } from '@playwright/test';
+const password = 'Test-password-long-123!';
+const headers = {'X-Ryadom':'1'};
+const baseURL = process.env.RYADOM_TEST_URL || 'http://127.0.0.1:4173';
+async function pair(browser:Browser) {
+ const doctor = await browser.newContext({baseURL}); const patient = await browser.newContext({baseURL});
+ const login = 'ui.'+crypto.randomUUID();
+ const registration = await doctor.request.post('/api/auth/register',{headers,data:{name:'Врач Проверка',login,password,consent:true}}); expect(registration.ok()).toBeTruthy();
+ const created = await doctor.request.post('/api/patients',{headers,data:{name:'Пациент Проверка',birth:'1995-03-12',consent:true,note:'Внутренняя заметка'}}); expect(created.ok()).toBeTruthy(); const access = await created.json();
+ const activation = await patient.request.post('/api/auth/activate',{headers,data:{token:access.inviteUrl.split('#')[1],password,consent:true}}); expect(activation.ok()).toBeTruthy();
+ return {doctor,patient,access,doctorPage:await doctor.newPage(),patientPage:await patient.newPage()};
+}
+async function state(context:BrowserContext) { return (await context.request.get('/api/state')).json(); }
+async function slide(page:Page) { const slider = page.getByRole('slider',{name:'Сдвиньте SOS до конца для подтверждения'}).filter({visible:true}); const box = (await slider.boundingBox())!; await page.mouse.move(box.x+24,box.y+box.height/2); await page.mouse.down(); await page.mouse.move(box.x+box.width-20,box.y+box.height/2,{steps:20}); await page.mouse.up(); }
+
+test('real registration, patient invitation and independent activation',async ({page,browser}) => {
+ await page.goto('/login'); await page.getByRole('button',{name:'Зарегистрироваться как врач'}).click();
+ await page.getByLabel('Ваше имя и фамилия').fill('Тестовый Врач'); await page.getByRole('textbox',{name:'Логин'}).fill('flow.'+crypto.randomUUID()); await page.getByLabel('Новый пароль',{exact:false}).fill(password); await page.getByLabel('Повторите пароль',{exact:true}).fill(password); await page.getByRole('checkbox').check(); await page.getByRole('button',{name:'Создать аккаунт врача'}).click();
+ await expect(page.getByRole('heading',{name:'Сохраните код восстановления'})).toBeVisible(); await page.getByRole('button',{name:'Я сохранил код · продолжить'}).click(); await expect(page).toHaveURL(/doctor\/overview/);
+ await page.getByRole('link',{name:'+ Новый пациент'}).click(); await page.getByLabel('Фамилия и имя *').fill('Новый Пациент'); await page.getByLabel('Дата рождения *').fill('1990-02-12'); await page.getByRole('checkbox').check(); await page.getByRole('button',{name:'Создать пациента',exact:true}).click(); await expect(page).toHaveURL(/doctor\/access/);
+ const url = await page.getByLabel('Одноразовая ссылка').inputValue(); const patientLogin = await page.getByLabel('Логин пациента').inputValue();
+ await page.context().grantPermissions(['clipboard-read','clipboard-write']); await page.getByRole('button',{name:'Скопировать ссылку',exact:true}).click(); expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(url);
+ const context = await browser.newContext({baseURL}); const p = await context.newPage(); await p.goto(url); await p.getByLabel('Новый пароль',{exact:false}).fill(password); await p.getByLabel('Повторите пароль',{exact:true}).fill(password); await p.getByRole('checkbox').check(); await p.getByRole('button',{name:'Сохранить пароль',exact:true}).click(); await expect(p.getByLabel('Ваш логин')).toHaveValue(patientLogin); await p.getByRole('button',{name:'Я сохранил код · продолжить'}).click(); await expect(p).toHaveURL(/patient\/today/); await p.reload(); await expect(p.getByRole('heading',{name:/Хорошо, что вы здесь/})).toBeVisible(); await context.close();
+});
+
+test('diary and messages sync across accounts with receipt and reconnect',async ({browser}) => {
+ const x = await pair(browser); const p = x.patientPage; const d = x.doctorPage;
+ await p.goto('/patient/diary'); await p.getByRole('button',{name:'4 Хорошо',exact:true}).click(); await p.getByLabel('Можно рассказать своими словами').fill('Наблюдение из отдельного аккаунта'); await p.getByRole('button',{name:/Далее — сон/}).click(); await p.getByLabel('Сколько часов вы спали?').fill('7.5'); await p.getByLabel('Сколько у вас энергии сейчас?').selectOption('7'); await p.getByRole('button',{name:'Сохранить запись',exact:true}).click(); await expect(p.getByRole('heading',{name:'Запись сохранена'})).toBeVisible();
+ await d.goto(`/doctor/patients/${x.access.id}?tab=diary`); await expect(d.getByText('Наблюдение из отдельного аккаунта',{exact:true})).toBeVisible();
+ await p.goto('/patient/messages'); await d.goto(`/doctor/messages?patient=${x.access.id}`); await p.getByRole('textbox',{name:'Сообщение',exact:true}).fill('Вопрос врачу из другого браузера'); await p.getByRole('button',{name:'Отправить сообщение'}).click(); await expect(d.getByText('Вопрос врачу из другого браузера',{exact:true})).toBeVisible({timeout:12000}); await d.getByRole('textbox',{name:'Сообщение',exact:true}).fill('Настоящий ответ врача'); await d.getByRole('button',{name:'Отправить сообщение'}).click(); await expect(p.getByText('Настоящий ответ врача',{exact:true})).toBeVisible({timeout:12000});
+ await x.patient.setOffline(true); await p.getByRole('textbox',{name:'Сообщение',exact:true}).fill('Не терять при ошибке'); await p.getByRole('button',{name:'Отправить сообщение'}).click(); await expect(p.getByRole('alert')).toContainText('Нет связи'); await expect(p.getByRole('textbox',{name:'Сообщение',exact:true})).toHaveValue('Не терять при ошибке'); await x.patient.setOffline(false); await p.getByRole('button',{name:'Отправить сообщение'}).click(); await expect(d.getByText('Не терять при ошибке',{exact:true})).toBeVisible({timeout:12000}); await p.reload(); await expect(p.getByText('Настоящий ответ врача',{exact:true})).toBeVisible();
+ await x.doctor.close(); await x.patient.close();
+});
+
+test('manual visit publishes plan while keeping internal notes private',async ({browser}) => {
+ const x = await pair(browser); const d = x.doctorPage; const p = x.patientPage;
+ await d.goto('/doctor/appointments'); await d.getByRole('button',{name:'+ Новый приём'}).click(); await d.getByLabel('Пациент',{exact:true}).selectOption(x.access.id); await d.getByRole('button',{name:'Создать приём'}).click();
+ await d.getByLabel('Жалобы, анамнез и заметки · видны только врачу').fill('Секретная заметка приёма'); await d.getByLabel('Подтверждаемый план для пациента').fill('План для пациента после подтверждения'); await d.getByRole('button',{name:'Сохранить черновик'}).click();
+ await p.goto('/patient/plan'); await expect(p.getByText('План для пациента после подтверждения',{exact:true})).toHaveCount(0); await d.getByRole('button',{name:'Подтвердить и сохранить'}).click(); await d.getByRole('button',{name:'Да, подтвердить план'}).click(); await expect(d.getByText('Подтверждено врачом',{exact:true})).toBeVisible(); await expect(p.getByText('План для пациента после подтверждения',{exact:true})).toBeVisible({timeout:12000}); expect(JSON.stringify(await state(x.patient))).not.toContain('Секретная заметка приёма'); await x.doctor.close(); await x.patient.close();
+});
+
+test('SOS is visible immediately, ignores tap and delivers through its own chat',async ({browser}) => {
+ const x = await pair(browser); const p = x.patientPage; const d = x.doctorPage;
+ await p.goto('/patient/today'); const slider = p.getByRole('slider',{name:'Сдвиньте SOS до конца для подтверждения'}).filter({visible:true}); await expect(slider).toBeVisible(); const box = (await slider.boundingBox())!; expect(box.y+box.height).toBeLessThan(1024); await p.mouse.click(box.x+box.width-10,box.y+box.height/2); expect((await state(x.patient)).sosEvents).toHaveLength(0); await slide(p); await expect(p).toHaveURL(/patient\/sos/); await expect(p.getByText('Отправлено · ожидает врача.',{exact:false})).toBeVisible(); await d.goto('/doctor/sos'); await expect(d.locator('.sos-layout .stack').getByRole('heading',{name:'Пациент Проверка',exact:true})).toBeVisible();
+ await p.getByLabel('Что происходит и когда началось?').fill('Описание срочного обращения'); await p.getByRole('button',{name:'Передать ответы врачу'}).click(); await expect(d.getByText('Описание срочного обращения',{exact:true})).toBeVisible({timeout:12000}); await d.getByRole('textbox',{name:'Сообщение',exact:true}).fill('Ответ в SOS'); await d.getByRole('button',{name:'Отправить сообщение'}).click(); await expect(p.getByText('Ответ в SOS',{exact:true})).toBeVisible({timeout:12000}); await expect(p.getByText('Врач ответил',{exact:true})).toBeVisible(); await x.doctor.close(); await x.patient.close();
+});
+
+test('audio records with consent and sends a playable private attachment',async ({browser}) => {
+ const x = await pair(browser); const p = x.patientPage;
+ await x.patient.grantPermissions(['microphone']); await p.goto('/patient/messages'); await p.getByRole('button',{name:'Голосовое сообщение',exact:true}).click(); await p.getByRole('button',{name:'Записать голосом',exact:true}).click(); await expect(p.getByRole('dialog',{name:'Разрешить запись голоса?'})).toBeVisible(); await p.getByRole('button',{name:'Включить микрофон'}).click(); await expect(p.getByText('Идёт запись',{exact:true})).toBeVisible(); await p.getByRole('button',{name:'Пауза',exact:true}).click(); await expect(p.getByText('Запись на паузе',{exact:true})).toBeVisible(); await p.getByRole('button',{name:'Продолжить',exact:true}).click(); await p.waitForTimeout(1500); await p.getByRole('button',{name:'Остановить запись'}).click(); await expect(p.locator('audio')).toBeVisible(); await p.getByRole('button',{name:'Отправить сообщение'}).click(); await expect.poll(async () => (await state(x.doctor)).messages.length).toBe(1); const message = (await state(x.doctor)).messages[0]; const audio = await x.doctor.request.get(`/api/media/${message.mediaId}`); expect(audio.ok()).toBeTruthy(); expect((await audio.body()).length).toBeGreaterThan(100); await x.doctor.close(); await x.patient.close();
+});
+
+test('responsive screens have no overflow and mobile SOS remains in view',async ({browser}) => {
+ const x = await pair(browser); const problems:string[]=[];
+ for (const width of [390,1440]) { await x.patientPage.setViewportSize({width,height:900}); await x.doctorPage.setViewportSize({width,height:900}); for (const [page, routes] of [[x.patientPage,['today','diary','plan','dynamics','messages','profile'].map(x => '/patient/'+x)],[x.doctorPage,['/doctor/overview','/doctor/patients','/doctor/new','/doctor/appointments','/doctor/messages','/doctor/sos','/doctor/settings',`/doctor/patients/${x.access.id}`,`/doctor/access/${x.access.id}`,`/doctor/patients/${x.access.id}/medical`]]] as [Page,string[]][]) { for (const route of routes) { await page.goto(route); await expect(page.locator('main')).toBeVisible(); await page.waitForTimeout(100); const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth+1); if(overflow)problems.push(`${width}:${route}`); } } }
+ await x.patientPage.setViewportSize({width:390,height:844}); await x.patientPage.goto('/patient/today'); const box = (await x.patientPage.getByRole('slider').filter({visible:true}).boundingBox())!; expect(box.y).toBeGreaterThan(0); expect(box.y+box.height).toBeLessThan(844-78); await slide(x.patientPage); await expect(x.patientPage).toHaveURL(/patient\/sos/); expect(problems).toEqual([]); await x.doctor.close(); await x.patient.close();
+});
