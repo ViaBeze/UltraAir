@@ -95,6 +95,19 @@ class Diary(Model):
     tags: Annotated[list[Short], Field(max_length=12)] = []
     comment: Text = ''
     mediaId: str | None = None
+    alcohol: Literal['yes', 'no', 'private'] | None = None
+    alcoholDrink: Annotated[str, Field(max_length=200)] = ''
+    alcoholVolume: float | None = Field(default=None, ge=0, le=10000)
+    alcoholStrength: float | None = Field(default=None, ge=0, le=100)
+    alcoholTime: Time | None = None
+    alcoholNote: Annotated[str, Field(max_length=1000)] = ''
+
+    @model_validator(mode='after')
+    def alcohol_details(self):
+        if self.alcohol != 'yes':
+            self.alcoholDrink = self.alcoholNote = ''
+            self.alcoholVolume = self.alcoholStrength = self.alcoholTime = None
+        return self
 
     @field_validator('date')
     @classmethod
@@ -178,6 +191,10 @@ class Mark(Model):
     time: Time
     status: Literal['taken', 'skipped', 'later']
     note: Annotated[str, Field(max_length=1000)] = ''
+
+
+class PlantChoice(Model):
+    plant: Literal['cornflower', 'cactus', 'daisy', 'monstera']
 
 
 class Settings(Model):

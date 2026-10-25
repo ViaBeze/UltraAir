@@ -128,7 +128,27 @@ def init_db():
           id TEXT PRIMARY KEY, actor TEXT NOT NULL REFERENCES users(id),
           action TEXT NOT NULL, entity TEXT NOT NULL, created TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS rate_limits(key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS patient_gardens(
+          patient_id TEXT PRIMARY KEY REFERENCES patients(id) ON DELETE CASCADE,
+          plant TEXT NOT NULL DEFAULT 'cornflower' CHECK(plant IN ('cornflower','cactus','daisy','monstera')),
+          chosen INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS garden_rewards(
+          patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+          source TEXT NOT NULL, amount INTEGER NOT NULL CHECK(amount > 0), created TEXT NOT NULL,
+          PRIMARY KEY(patient_id,source));
+        CREATE TABLE IF NOT EXISTS garden_waterings(
+          patient_id TEXT NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+          request_id TEXT NOT NULL, amount INTEGER NOT NULL CHECK(amount = 3), created TEXT NOT NULL,
+          PRIMARY KEY(patient_id,request_id));
         ''')
+        if not db.execute('SELECT 1 FROM schema_version WHERE version=2').fetchone():
+            # Preserve credit for existing records; their edits cannot award a second time.
+            db.execute('''INSERT OR IGNORE INTO garden_rewards
+                          SELECT patient_id,'diary:' || day,3,created FROM entries''')
+            db.execute('''INSERT OR IGNORE INTO garden_rewards
+                          SELECT patient_id,'medicine:' || prescription_id || ':' || day || ':' || slot,1,updated
+                          FROM medicine_marks WHERE status='taken' ''')
+            db.execute('INSERT INTO schema_version VALUES(2)')
     os.chmod(DATA / 'ryadom.sqlite3', 0o600)
 
 

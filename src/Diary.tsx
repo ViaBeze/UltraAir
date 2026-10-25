@@ -1,0 +1,31 @@
+import { useState } from 'react';
+import { dayLabel, today, uploadAudio, useAction, useApp } from './state';
+import type { AlcoholFields, RewardResult } from './state';
+import { Button, ButtonLink, Card, CardHeading, Chip, Empty, Field, Heading, Icon, Recorder } from './ui';
+import { Drop } from './Garden';
+import { AlcoholQuestion, AlcoholRecord, emptyAlcohol } from './DiaryAlcohol';
+
+export function Diary() {
+ const { state, mutate, toast } = useApp(); const action = useAction(); const day = today(state.settings.timezone); const existing = state.entries.find(e => e.date === day);
+ const [step,setStep] = useState(1); const [saved,setSaved] = useState(false); const [reward,setReward] = useState(0);
+ const [score,setScore] = useState<number | null>(existing?.score || null); const [tags,setTags] = useState<string[]>(existing?.tags || []); const [comment,setComment] = useState(existing?.comment || '');
+ const [sleep,setSleep] = useState(existing ? String(existing.sleep) : ''); const [energy,setEnergy] = useState(existing ? String(existing.energy) : '');
+ const [blob,setBlob] = useState<Blob | null>(null); const [mediaId,setMediaId] = useState<string | null>(existing?.mediaId || null);
+ const [alcohol,setAlcohol] = useState<AlcoholFields>({ alcohol: existing?.alcohol ?? null, alcoholDrink: existing?.alcoholDrink ?? '', alcoholVolume: existing?.alcoholVolume ?? null, alcoholStrength: existing?.alcoholStrength ?? null, alcoholTime: existing?.alcoholTime ?? null, alcoholNote: existing?.alcoholNote ?? '' });
+ const p = state.patients[0];
+ return <><Heading title="Минута внимания к себе" subtitle={`${dayLabel(day)} · ${existing ? 'запись за сегодня' : 'новая запись'}`}/><div className="two-column diary-layout"><Card className="diary-form">
+  {saved ? <div className="success-state"><span className="success-icon"><Icon name="check"/></span><h2>Запись сохранена</h2>{reward > 0 && <span className="diary-reward"><Drop>+{reward} капли</Drop></span>}<p>Ваши ответы доступны лечащему врачу.{reward > 0 ? ' Растение уже получило капли и выросло.' : 'Изменения сохранены без повторного начисления капель.'}</p><ButtonLink to="/patient/today" icon="leaf">К моему растению</ButtonLink><ButtonLink to="/patient/dynamics" variant="secondary">Посмотреть динамику</ButtonLink><Button variant="quiet" onClick={() => { setSaved(false); setStep(1); }}>Изменить сегодняшнюю запись</Button></div> :
+  <form onSubmit={e => { e.preventDefault(); void action.run(async () => {
+   if (score === null || !p || sleep === '' || energy === '') return;
+   let audio = mediaId; if (blob && !audio) { audio = (await uploadAudio(blob,p.id,'diary')).id; setMediaId(audio); }
+   const result = await mutate<RewardResult>('/diary', 'PUT', { date: day, score, sleep: Number(sleep), energy: Number(energy), tags, comment, mediaId: audio, ...(alcohol.alcohol === 'yes' ? alcohol : { ...emptyAlcohol, alcohol: alcohol.alcohol }) });
+   setReward(result.earnedDrops); setSaved(true); toast(result.earnedDrops ? `Запись сохранена · +${result.earnedDrops} капли растению` : 'Изменения сохранены');
+  }); }}>
+   <div className="row between"><Chip>Шаг {step} из 2</Chip><span className="small muted">{existing ? 'Запись за сегодня' : <Drop>За дневник +3</Drop>}</span></div><div className="step-progress"><i className="active"/><i className={step === 2 ? 'active' : ''}/></div>
+   {step === 1 ? <><h2>Как вы чувствуете себя сейчас?</h2><div className="mood-options" role="group" aria-label="Оценка самочувствия">{['Тяжело','Не очень','Нейтрально','Хорошо','Очень хорошо'].map((label,i) => <button type="button" key={label} aria-pressed={score === (i+1)*2} className={score === (i+1)*2 ? 'selected' : ''} onClick={() => setScore((i+1)*2)}><strong>{i+1}</strong><span>{label}</span></button>)}</div><h3>Что ещё вы замечаете?</h3><div className="tag-options">{['Усталость','Тревога','Спокойнее','Больше сил','Сложно сосредоточиться'].map(tag => <button type="button" key={tag} aria-pressed={tags.includes(tag)} className={tags.includes(tag) ? 'selected' : ''} onClick={() => setTags(tags.includes(tag) ? tags.filter(t => t !== tag) : [...tags,tag])}>{tag}</button>)}</div><Field label="Можно рассказать своими словами"><textarea rows={4} value={comment} onChange={e => setComment(e.target.value)} maxLength={10000}/></Field><Recorder compact onComplete={b => { setBlob(b); setMediaId(null); }}/>{mediaId && !blob && <audio controls src={`/api/media/${mediaId}`}/>}<p className="small muted">Текст и аудио отправятся врачу после сохранения записи.</p><Button type="button" disabled={score === null} onClick={() => setStep(2)}>Далее — сон и энергия →</Button></> : <>
+    <h2>Как прошли сон и отдых?</h2><Field label="Сколько часов вы спали?"><input type="number" min="0" max="24" step="0.5" required value={sleep} onChange={e => setSleep(e.target.value)}/></Field><Field label="Сколько у вас энергии сейчас?"><select required value={energy} onChange={e => setEnergy(e.target.value)}><option value="">Выберите оценку</option>{Array.from({length:11},(_,i) => <option key={i} value={i}>{i} из 10</option>)}</select></Field>
+    <AlcoholQuestion value={alcohol} onChange={setAlcohol}/>{action.error && <p role="alert" className="error-text">{action.error}</p>}<div className="row wrap"><Button variant="quiet" type="button" onClick={() => setStep(1)}>Назад</Button><Button type="submit" disabled={action.busy || sleep === '' || energy === ''}>{action.busy ? 'Сохраняем…' : 'Сохранить запись'}</Button></div>
+   </>}
+  </form>}
+ </Card><div className="stack"><Card><CardHeading title="Ваши записи"/>{state.entries.length ? state.entries.slice(0,10).map(e => <div key={e.id} className="history-entry"><div className="row between"><strong>{dayLabel(e.date)}</strong><Chip>{e.score}/10</Chip></div><p className="pre-wrap">{e.comment || 'Без комментария'}</p><p>Сон {e.sleep} ч · энергия {e.energy}/10</p><AlcoholRecord entry={e}/>{e.mediaId && <audio controls preload="none" src={`/api/media/${e.mediaId}`}/>}</div>) : <Empty title="Начните с первой записи"/>}</Card><Card className="lavender"><h3>Капля за внимание к себе</h3><p>За заполненный опрос в дневнике — 3 капли. Любой ответ одинаково важен. Исправление записи не даёт повторной награды.</p><ButtonLink to="/patient/today" variant="quiet">К моему растению →</ButtonLink></Card></div></div></>;
+}

@@ -2,8 +2,12 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import type { ReactNode } from 'react';
 import { clearBrowserPush } from './pushClient';
 export type User = { id: string; role: 'patient' | 'doctor'; login: string; name: string };
-export type Patient = { id: string; name: string; age: string; birth: string; phone: string; email: string; department: string; note?: string; diagnosis?: string; treatment?: string; allergy?: string; medications?: string[]; conditions?: string; transfer?: string; doctorName: string; login: string; activated: boolean; version: number; created: string; updated: string };
-export type Entry = { id: string; patientId: string; date: string; score: number; sleep: number; energy: number; tags: string[]; comment: string; mediaId?: string; created: string; updated: string };
+export type PlantKind = 'cornflower' | 'cactus' | 'daisy' | 'monstera';
+export type Garden = { plant: PlantKind; chosen: boolean; growth: number; stage: number };
+export type RewardResult = { ok: boolean; earnedDrops: number };
+export type AlcoholFields = { alcohol: 'yes' | 'no' | 'private' | null; alcoholDrink: string; alcoholVolume: number | null; alcoholStrength: number | null; alcoholTime: string | null; alcoholNote: string };
+export type Patient = { id: string; name: string; age: string; birth: string; phone: string; email: string; department: string; note?: string; diagnosis?: string; treatment?: string; allergy?: string; medications?: string[]; conditions?: string; transfer?: string; doctorName: string; login: string; activated: boolean; version: number; created: string; updated: string; garden: Garden };
+export type Entry = Partial<AlcoholFields> & { id: string; patientId: string; date: string; score: number; sleep: number; energy: number; tags: string[]; comment: string; mediaId?: string; created: string; updated: string };
 export type Message = { id: string; author: 'patient' | 'doctor'; authorName: string; text: string; created: string; readAt: string | null; patientId: string; sosId: string | null; mediaId: string | null };
 export type Medication = { name: string; dose: string; instructions: string; times: string[]; start: string; end: string | null };
 export type Prescription = Medication & { id: string; patientId: string; visitId: string; active: boolean };

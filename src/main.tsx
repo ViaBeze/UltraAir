@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import '@fontsource-variable/inter';
 import './styles.css';
+import './garden.css';
 import { AppProvider, useApp } from './state';
 import { Shell } from './Shell';
 import { PatientHome, Diary, Plan, Dynamics, PatientSos, PatientProfile } from './Patient';

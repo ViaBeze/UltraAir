@@ -12,7 +12,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, Response, UploadFi
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, FileResponse
 from . import models as m
-from . import push
+from . import push, garden
 from .db import DATA, init_db, get_db, transaction, dump, uid, now, audit, notify
 from .auth import (PUBLIC_URL, SECURE, COOKIE, SIGNUP, ALLOWED_ORIGINS, HASHER,
                    current_user, doctor, patient, public_user, auth_limit,
@@ -68,7 +68,7 @@ def serialize_patient(db, row, is_doctor):
     account = db.execute('SELECT login,password FROM users WHERE id=?', (row['user_id'],)).fetchone()
     return dict({**profile, **clinical}, id=row['id'], age=f'{age} лет', doctorName=doc['name'],
                 login=account['login'], activated=bool(account['password']), version=row['version'],
-                created=row['created'], updated=row['updated'])
+                created=row['created'], updated=row['updated'], garden=garden.snapshot(db, row['id']))
 
 
 def serialize_visit(row, is_doctor):
@@ -323,13 +323,38 @@ def clinical(patient_id: str, data: m.Clinical, user=Depends(doctor), db=Depends
 @app.put('/api/diary')
 def diary(data: m.Diary, user=Depends(patient), db=Depends(get_db, scope='function')):
     p = patient_row(db, user)
+    local_day = datetime.now(ZoneInfo(m.Settings(**json.loads(user['settings'])).timezone)).date()
+    if data.date > local_day:
+        raise HTTPException(422, 'Нельзя добавить запись в будущем')
     media_check(db, user, p['id'], data.mediaId, 'diary')
+    value = data.model_dump(mode='json')
+    if 'alcohol' not in data.model_fields_set:
+        # Older open tabs do not know these fields; do not erase an existing answer.
+        previous = db.execute('SELECT data FROM entries WHERE patient_id=? AND day=?', (p['id'], data.date.isoformat())).fetchone()
+        if previous:
+            value.update({k: v for k, v in json.loads(previous['data']).items() if k.startswith('alcohol')})
     db.execute('''INSERT INTO entries VALUES(?,?,?,?,?,?,?) ON CONFLICT(patient_id,day)
                   DO UPDATE SET data=excluded.data,updated=excluded.updated''',
-               (uid(), p['id'], data.date.isoformat(), dump(data.model_dump(mode='json')), user['id'], now(), now()))
+               (uid(), p['id'], data.date.isoformat(), dump(value), user['id'], now(), now()))
+    earned = garden.reward(db, p['id'], f'diary:{data.date}', 3) if data.date >= local_day - timedelta(days=7) else 0
     notify(db, p['doctor_id'], 'Новая запись дневника', f"/doctor/patients/{p['id']}?tab=diary", digest(f"diary:{p['id']}:{data.date}"))
     audit(db, user['id'], 'diary_saved', p['id'])
-    return {'ok': True}
+    return {'ok': True, 'earnedDrops': earned}
+
+
+@app.put('/api/garden/plant')
+def choose_plant(data: m.PlantChoice, user=Depends(patient), db=Depends(get_db, scope='function')):
+    p = patient_row(db, user)
+    db.execute('''INSERT INTO patient_gardens VALUES(?,?,1,?) ON CONFLICT(patient_id)
+                  DO UPDATE SET plant=excluded.plant,chosen=1,updated=excluded.updated''',
+               (p['id'], data.plant, now()))
+    return {'ok': True, 'garden': garden.snapshot(db, p['id'])}
+
+
+@app.post('/api/garden/water')
+def manual_watering_removed(user=Depends(patient)):
+    # Older tabs may still contain this button. They cannot alter growth.
+    raise HTTPException(410, 'Растение поливается автоматически после отметки приёма лекарства или заполнения дневника. Обновите страницу.')
 
 
 @app.post('/api/visits')
@@ -391,7 +416,8 @@ def mark(prescription_id: str, data: m.Mark, user=Depends(patient), db=Depends(g
                   DO UPDATE SET status=excluded.status,note=excluded.note,updated=excluded.updated''',
                (uid(), prescription_id, p['id'], data.date.isoformat(), data.time, data.status, data.note, now()))
     audit(db, user['id'], 'medicine_' + data.status, prescription_id)
-    return {'ok': True}
+    earned = garden.reward(db, p['id'], f'medicine:{prescription_id}:{data.date}:{data.time}', 1) if data.status == 'taken' else 0
+    return {'ok': True, 'earnedDrops': earned}
 
 
 @app.post('/api/messages')
