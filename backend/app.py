@@ -12,7 +12,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, Response, UploadFi
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, FileResponse
 from . import models as m
-from . import push, garden
+from . import push, garden, ai, medicines
 from .db import DATA, init_db, get_db, transaction, dump, uid, now, audit, notify
 from .auth import (PUBLIC_URL, SECURE, COOKIE, SIGNUP, ALLOWED_ORIGINS, HASHER,
                    current_user, doctor, patient, public_user, auth_limit,
@@ -47,13 +47,16 @@ def sos_row(db, user, sos_id):
     return row
 
 
-def media_check(db, user, patient_id, media_id, purpose):
+def media_check(db, user, patient_id, media_id, purpose, sos_id=None):
     if not media_id:
         return
     row = db.execute('SELECT * FROM media WHERE id=? AND author=? AND patient_id=? AND purpose=?',
                      (media_id, user['id'], patient_id, purpose)).fetchone()
     if not row:
         raise HTTPException(404, 'Запись не найдена')
+    protected = db.execute('SELECT sos_id FROM media_sos WHERE media_id=?', (media_id,)).fetchone()
+    if protected and protected['sos_id'] != sos_id:
+        raise HTTPException(409, 'Эта запись относится к SOS-обращению и не может быть перенесена.')
 
 
 def serialize_patient(db, row, is_doctor):
@@ -79,12 +82,26 @@ def serialize_visit(row, is_doctor):
                 version=row['version'], confirmed=row['confirmed'], created=row['created'], updated=row['updated'], **data)
 
 
-def serialize_message(row):
+def serialize_message(row, user):
     return dict(id=row['id'], patientId=row['patient_id'], author=row['role'], authorName=row['name'],
-                text=row['body'], sosId=row['sos_id'], mediaId=row['media_id'], created=row['created'], readAt=row['read_at'])
+                text=row['body'], sosId=row['sos_id'], mediaId=row['media_id'], created=row['created'], readAt=row['read_at'],
+                canDeleteAudio=bool(row['media_id'] and row['author'] == user['id'] and not row['audio_sos_id']))
+
+
+def purge_deleted_audio():
+    # Retry failed filesystem removals after a crash or temporary disk error.
+    # Database references and transcripts have already been removed atomically.
+    with transaction() as db:
+        for row in db.execute('SELECT media_id FROM pending_media_deletions').fetchall():
+            try:
+                (DATA / 'media' / row['media_id']).unlink(missing_ok=True)
+            except OSError:
+                continue
+            db.execute('DELETE FROM pending_media_deletions WHERE media_id=?', (row['media_id'],))
 
 
 def reminder_tick():
+    purge_deleted_audio()
     with transaction() as db:
         for p in db.execute('SELECT p.*,u.settings FROM patients p JOIN users u ON p.user_id=u.id WHERE u.password IS NOT NULL').fetchall():
             settings = m.Settings(**json.loads(p['settings']))
@@ -142,6 +159,8 @@ async def lifespan(app):
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(push.router)
+app.include_router(ai.router)
+app.include_router(medicines.router)
 
 
 @app.middleware('http')
@@ -264,16 +283,18 @@ def state(user=Depends(current_user), db=Depends(get_db, scope='function')):
         return db.execute(f'SELECT * FROM {table} WHERE patient_id IN ({scope}) {tail}', (user['id'],)).fetchall()
     entries = [dict(id=r['id'], patientId=r['patient_id'], **json.loads(r['data']), created=r['created'], updated=r['updated']) for r in scoped('entries', 'ORDER BY day DESC')]
     visits = [serialize_visit(r, is_doctor) for r in scoped('visits', 'ORDER BY scheduled DESC')]
-    messages = db.execute(f'''SELECT m.*,u.role,u.name FROM messages m JOIN users u ON u.id=m.author
+    messages = db.execute(f'''SELECT m.*,u.role,u.name,ms.sos_id AS audio_sos_id FROM messages m JOIN users u ON u.id=m.author
+                              LEFT JOIN media_sos ms ON ms.media_id=m.media_id
                               WHERE m.patient_id IN ({scope}) ORDER BY m.created DESC LIMIT 500''', (user['id'],)).fetchall()
     sos = [dict(id=r['id'], patientId=r['patient_id'], status=r['status'], **json.loads(r['data']), created=r['created'], delivered=r['delivered'], answered=r['answered'], closed=r['closed']) for r in scoped('sos', 'ORDER BY created DESC')]
     prescriptions = [dict(id=r['id'], patientId=r['patient_id'], visitId=r['visit_id'], active=bool(r['active']), **json.loads(r['data'])) for r in scoped('prescriptions')]
     marks = [dict(id=r['id'], prescriptionId=r['prescription_id'], patientId=r['patient_id'], date=r['day'], time=r['slot'], status=r['status'], note=r['note'], updated=r['updated']) for r in scoped('medicine_marks')]
     notifications = [dict(id=r['id'], title=r['title'], link=r['link'], created=r['created'], readAt=r['read_at']) for r in db.execute('SELECT * FROM notifications WHERE user_id=? ORDER BY created DESC LIMIT 100', (user['id'],))]
     return dict(user=public_user(user), patients=[serialize_patient(db, p, is_doctor) for p in patients],
-                entries=entries, visits=visits, messages=[serialize_message(r) for r in reversed(messages)],
+                entries=entries, visits=visits, messages=[serialize_message(r, user) for r in reversed(messages)],
                 sosEvents=sos, prescriptions=prescriptions, marks=marks, notifications=notifications,
-                settings=m.Settings(**json.loads(user['settings'])).model_dump())
+                settings=m.Settings(**json.loads(user['settings'])).model_dump(),
+                **({'ai': {'enabled': ai.enabled()}} if is_doctor else {}))
 
 
 @app.post('/api/patients')
@@ -326,6 +347,7 @@ def diary(data: m.Diary, user=Depends(patient), db=Depends(get_db, scope='functi
     local_day = datetime.now(ZoneInfo(m.Settings(**json.loads(user['settings'])).timezone)).date()
     if data.date > local_day:
         raise HTTPException(422, 'Нельзя добавить запись в будущем')
+    db.execute('BEGIN IMMEDIATE')
     media_check(db, user, p['id'], data.mediaId, 'diary')
     value = data.model_dump(mode='json')
     if 'alcohol' not in data.model_fields_set:
@@ -378,6 +400,10 @@ def edit_visit(visit_id: str, data: m.VisitEdit, user=Depends(doctor), db=Depend
         raise HTTPException(422, 'Заполните план перед подтверждением')
     if data.confirm and data.cancel:
         raise HTTPException(422, 'Выберите одно действие')
+    if data.confirm and data.clinicalDraft:
+        p = patient_row(db, user, v['patient_id'])
+        if p['version'] != data.clinicalDraft.version:
+            raise HTTPException(409, 'Медкарта изменилась. Повторно проверьте изменения карточки перед подтверждением.')
     status = 'confirmed' if data.confirm else 'cancelled' if data.cancel else 'draft'
     changed = db.execute('UPDATE visits SET data=?,status=?,version=version+1,updated=?,confirmed=? WHERE id=? AND version=?',
                          (dump(data.model_dump(mode='json', exclude={'version', 'confirm', 'cancel'})), status, now(), now() if data.confirm else None, visit_id, data.version)).rowcount
@@ -390,10 +416,17 @@ def edit_visit(visit_id: str, data: m.VisitEdit, user=Depends(doctor), db=Depend
             db.execute('INSERT INTO prescriptions VALUES(?,?,?,?,1,?)', (uid(), v['patient_id'], visit_id, dump(value.model_dump(mode='json')), now()))
         p = patient_row(db, user, v['patient_id'])
         clinical = json.loads(p['clinical'])
+        if data.clinicalDraft:
+            clinical.update(data.clinicalDraft.model_dump(exclude={'version'}, exclude_none=True))
         clinical['diagnosis'] = data.diagnosis or clinical.get('diagnosis', '')
         clinical['treatment'] = data.plan
-        db.execute('UPDATE patients SET clinical=?,version=version+1,updated=? WHERE id=?',
-                   (dump(clinical), now(), p['id']))
+        patient_version = data.clinicalDraft.version if data.clinicalDraft else p['version']
+        changed = db.execute('UPDATE patients SET clinical=?,version=version+1,updated=? WHERE id=? AND version=?',
+                             (dump(clinical), now(), p['id'], patient_version)).rowcount
+        if not changed:
+            raise HTTPException(409, 'Медкарта изменилась. Проверьте её перед подтверждением.')
+        if data.clinicalDraft:
+            audit(db, user['id'], 'clinical_draft_confirmed', p['id'])
         notify(db, p['user_id'], 'Врач подтвердил новый план', '/patient/plan')
     elif data.cancel:
         p = patient_row(db, user, v['patient_id'])
@@ -424,17 +457,20 @@ def mark(prescription_id: str, data: m.Mark, user=Depends(patient), db=Depends(g
 def send_message(data: m.MessageCreate, user=Depends(current_user), db=Depends(get_db, scope='function')):
     p = patient_row(db, user, data.patientId)
     limit('message:' + user['id'], 90, 60)
+    db.execute('BEGIN IMMEDIATE')
     if data.sosId:
         s = sos_row(db, user, data.sosId)
         if s['patient_id'] != p['id'] or s['closed']:
             raise HTTPException(409, 'SOS-обращение закрыто или недоступно')
-    media_check(db, user, p['id'], data.mediaId, 'message')
+    media_check(db, user, p['id'], data.mediaId, 'message', data.sosId)
     existing = db.execute('SELECT * FROM messages WHERE id=?', (data.id,)).fetchone()
     if existing:
         if existing['author'] == user['id'] and existing['patient_id'] == p['id'] and existing['body'] == data.text and existing['sos_id'] == data.sosId and existing['media_id'] == data.mediaId:
             return {'id': existing['id']}
         raise HTTPException(409, 'Идентификатор сообщения уже использован')
     db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?,NULL)', (data.id, p['id'], user['id'], data.text, data.sosId, data.mediaId, now()))
+    if data.sosId and data.mediaId:
+        db.execute('INSERT OR IGNORE INTO media_sos VALUES(?,?)', (data.mediaId, data.sosId))
     recipient = p['doctor_id'] if user['role'] == 'patient' else p['user_id']
     link = f"/doctor/messages?patient={p['id']}" if user['role'] == 'patient' else '/patient/messages'
     if data.sosId:
@@ -448,10 +484,11 @@ def send_message(data: m.MessageCreate, user=Depends(current_user), db=Depends(g
 @app.get('/api/messages')
 def message_history(patientId: str, before: str = '', sosId: str = '', user=Depends(current_user), db=Depends(get_db, scope='function')):
     patient_row(db, user, patientId)
-    rows = db.execute('''SELECT m.*,u.role,u.name FROM messages m JOIN users u ON u.id=m.author
+    rows = db.execute('''SELECT m.*,u.role,u.name,ms.sos_id AS audio_sos_id FROM messages m JOIN users u ON u.id=m.author
+                         LEFT JOIN media_sos ms ON ms.media_id=m.media_id
                          WHERE m.patient_id=? AND COALESCE(m.sos_id,'')=? AND (?='' OR m.created<?)
                          ORDER BY m.created DESC LIMIT 100''', (patientId, sosId, before, before)).fetchall()
-    return [serialize_message(r) for r in reversed(rows)]
+    return [serialize_message(r, user) for r in reversed(rows)]
 
 
 @app.post('/api/messages/read')
@@ -515,7 +552,7 @@ def read_notification(notification_id: str, user=Depends(current_user), db=Depen
 
 
 @app.post('/api/media')
-def upload(patientId: str = Form(...), purpose: str = Form(...), visitId: str = Form(''), consent: bool = Form(...),
+def upload(patientId: str = Form(...), purpose: str = Form(...), visitId: str = Form(''), sosId: str = Form(''), consent: bool = Form(...),
            audio: UploadFile = File(...), user=Depends(current_user), db=Depends(get_db, scope='function')):
     patient_row(db, user, patientId)
     if not consent:
@@ -531,14 +568,20 @@ def upload(patientId: str = Form(...), purpose: str = Form(...), visitId: str = 
             raise HTTPException(409, 'Нельзя добавить запись к этому приёму')
     elif visitId:
         raise HTTPException(422, 'Неверное назначение записи')
+    if sosId:
+        s = sos_row(db, user, sosId)
+        if purpose != 'message' or s['patient_id'] != patientId or s['closed']:
+            raise HTTPException(409, 'SOS-обращение закрыто или недоступно')
     mime = (audio.content_type or '').split(';')[0]
-    if mime not in ('audio/webm', 'audio/ogg', 'audio/mp4', 'audio/wav', 'audio/x-wav'):
-        raise HTTPException(415, 'Поддерживаются аудиозаписи WebM, Ogg, MP4 и WAV')
+    mime = {'audio/x-m4a': 'audio/mp4', 'audio/m4a': 'audio/mp4', 'video/mp4': 'audio/mp4', 'video/webm': 'audio/webm', 'audio/mp3': 'audio/mpeg'}.get(mime, mime)
+    if mime not in ('audio/webm', 'audio/ogg', 'audio/mp4', 'audio/wav', 'audio/x-wav', 'audio/mpeg'):
+        raise HTTPException(415, 'Поддерживаются аудиозаписи WebM, Ogg, MP3, M4A / MP4 и WAV')
     # Validate the signature and bound both single-file and per-user storage use.
     head = audio.file.read(32)
     valid = ((mime == 'audio/webm' and head.startswith(b'\x1a\x45\xdf\xa3')) or
              (mime == 'audio/ogg' and head.startswith(b'OggS')) or
              (mime == 'audio/mp4' and head[4:8] == b'ftyp') or
+             (mime == 'audio/mpeg' and (head.startswith(b'ID3') or (len(head) >= 2 and head[0] == 0xff and head[1] & 0xe0 == 0xe0))) or
              (mime in ('audio/wav', 'audio/x-wav') and head.startswith(b'RIFF') and head[8:12] == b'WAVE'))
     if not valid:
         raise HTTPException(415, 'Файл не похож на поддерживаемую аудиозапись')
@@ -558,6 +601,8 @@ def upload(patientId: str = Form(...), purpose: str = Form(...), visitId: str = 
                     raise HTTPException(413, 'Максимальный размер записи — 25 МБ')
                 out.write(chunk)
         db.execute('INSERT INTO media VALUES(?,?,?,?,?,?,?,?)', (media_id, patientId, user['id'], mime, size, purpose, visitId or None, now()))
+        if sosId:
+            db.execute('INSERT INTO media_sos VALUES(?,?)', (media_id, sosId))
         audit(db, user['id'], 'audio_uploaded_with_consent', media_id)
         db.commit()
     except Exception:
@@ -569,11 +614,41 @@ def upload(patientId: str = Form(...), purpose: str = Form(...), visitId: str = 
 @app.get('/api/visits/{visit_id}/media')
 def visit_media(visit_id: str, user=Depends(doctor), db=Depends(get_db, scope='function')):
     visit_row(db, user, visit_id)
-    return [dict(id=r['id'], created=r['created']) for r in db.execute('SELECT id,created FROM media WHERE visit_id=? ORDER BY created', (visit_id,))]
+    return [dict(id=r['id'], created=r['created'], canDelete=r['author'] == user['id'])
+            for r in db.execute('SELECT id,created,author FROM media WHERE visit_id=? ORDER BY created', (visit_id,))]
+
+
+@app.delete('/api/media/{media_id}')
+def delete_audio(media_id: str, data: m.MediaDelete, user=Depends(current_user), db=Depends(get_db, scope='function')):
+    # Serialize deletion with attachment publication and transcription leases.
+    db.execute('BEGIN IMMEDIATE')
+    row = media_row(db, user, media_id)
+    if row['author'] != user['id']:
+        raise HTTPException(403, 'Можно удалить только свою голосовую запись.')
+    if db.execute('SELECT 1 FROM media_sos WHERE media_id=?', (media_id,)).fetchone():
+        raise HTTPException(403, 'Голосовые записи SOS нельзя удалять.')
+    if db.execute('SELECT 1 FROM ai_locks WHERE key=? AND expires>?', ('transcript:' + media_id, time.time())).fetchone():
+        raise HTTPException(409, 'Дождитесь окончания расшифровки, затем повторите удаление.')
+    db.execute('UPDATE messages SET media_id=NULL WHERE media_id=?', (media_id,))
+    db.execute("UPDATE entries SET data=json_remove(data,'$.mediaId'),updated=? WHERE json_extract(data,'$.mediaId')=?", (now(), media_id))
+    db.execute('DELETE FROM media WHERE id=?', (media_id,))
+    db.execute('INSERT INTO pending_media_deletions VALUES(?,?)', (media_id, now()))
+    audit(db, user['id'], 'audio_deleted', media_id)
+    db.commit()
+    purge_deleted_audio()
+    return {'ok': True}
 
 
 @app.get('/api/media/{media_id}')
 def download(media_id: str, user=Depends(current_user), db=Depends(get_db, scope='function')):
+    row = media_row(db, user, media_id)
+    path = DATA / 'media' / row['id']
+    if not path.is_file():
+        raise HTTPException(404, 'Запись не найдена')
+    return FileResponse(path, media_type=row['mime'], headers={'Cache-Control': 'private, no-store'})
+
+
+def media_row(db, user, media_id):
     row = db.execute('SELECT * FROM media WHERE id=?', (media_id,)).fetchone()
     if not row:
         raise HTTPException(404, 'Запись не найдена')
@@ -584,7 +659,4 @@ def download(media_id: str, user=Depends(current_user), db=Depends(get_db, scope
         raise HTTPException(404, 'Запись ещё не отправлена')
     if row['author'] != user['id'] and row['purpose'] == 'diary' and not db.execute("SELECT 1 FROM entries WHERE json_extract(data,'$.mediaId')=?", (media_id,)).fetchone():
         raise HTTPException(404, 'Запись ещё не сохранена')
-    path = DATA / 'media' / row['id']
-    if not path.is_file():
-        raise HTTPException(404, 'Запись не найдена')
-    return FileResponse(path, media_type=row['mime'], headers={'Cache-Control': 'private, no-store'})
+    return row

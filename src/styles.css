@@ -26,6 +26,28 @@
 
 .field>label{font-weight:500}
 
+/* Calm support stays in view while the patient fills out the SOS questions. */
+.sos-calm{position:sticky;top:max(12px,env(safe-area-inset-top));z-index:10;display:flex;align-items:center;gap:20px;padding:16px 24px;background:#edf3ec;border:1px solid #dbe7da;border-radius:24px;box-shadow:0 8px 24px #233c3508}
+.sos-calm-circle{position:relative;display:grid;place-items:center;width:88px;height:88px;flex-shrink:0;border-radius:50%;background:#e1ebdf}
+.sos-calm-halo{position:absolute;inset:0;border:1px solid #aec8b5;border-radius:50%;background:#cbdcc9;animation:sos-calm-breathe 8s ease-in-out infinite}
+.sos-calm-core{position:absolute;inset:20%;display:grid;place-items:center;background:#a9c6b3;border-radius:50%;animation:sos-calm-breathe 8s ease-in-out infinite}
+.sos-calm-core .icon,.sos-calm-core .icon img{width:22px;height:22px}
+.sos-calm-copy{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.sos-calm-copy h2{font-size:20px;line-height:27px}
+.sos-calm-copy p{font-size:14px;line-height:21px;color:var(--muted)}
+.sos-calm-toggle{width:44px;height:44px;background:#ffffff85;border:1px solid #dbe7da}
+.sos-calm.is-paused .sos-calm-halo,.sos-calm.is-paused .sos-calm-core{animation-play-state:paused}
+.sos-calm~.sos-layout :is(input,textarea,button,a){scroll-margin-top:160px;scroll-margin-bottom:100px}
+.sos-slider.is-busy{opacity:1;background:var(--mint)}
+.sos-slider.is-busy input{opacity:0}
+.sos-slider-pending{display:flex;align-items:center;justify-content:center;gap:8px;height:100%;padding:4px 8px;color:var(--green);font-size:11px}
+.sos-slider-pending .sos-calm-circle{width:38px;height:38px}
+.sos-slider-pending .sos-calm-core .icon,.sos-slider-pending .sos-calm-core .icon img{width:15px;height:15px}
+@keyframes sos-calm-breathe{0%,100%{transform:scale(.8);opacity:.75}50%{transform:scale(1);opacity:1}}
+@media(max-width:900px){.sos-calm{gap:12px;padding:12px;border-radius:20px}.sos-calm-circle{width:64px;height:64px}.sos-calm-copy{gap:4px}.sos-calm-copy h2{font-size:16px;line-height:22px}.sos-calm-copy p{font-size:12px;line-height:18px}.sos-calm-toggle{width:40px;height:40px}.sos-calm~.sos-layout :is(input,textarea,button,a){scroll-margin-top:140px}}
+@media(max-width:360px){.sos-calm{gap:10px}.sos-calm-circle{width:52px;height:52px}.sos-calm-copy h2{font-size:15px}}
+@media(prefers-reduced-motion:reduce){.sos-calm-toggle{display:none}}
+
 .persistent-sos .sos-slider>span>.icon{display:inline-flex}
 @media(max-width:900px){.notification-button{display:inline-flex}}
 /* Phone notification setup and urgent alerts. */

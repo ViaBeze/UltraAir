@@ -1,0 +1,21 @@
+.ai-panel, .ai-suggestions, .ai-proposal, .ai-clinical-fields { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.ai-panel h2, .ai-suggestions h3 { margin: 0; }
+.ai-panel textarea, .ai-clinical-fields textarea { width: 100%; }
+.ai-panel .row .button { white-space: normal; }
+.ai-panel .checkbox, .ai-transcript .checkbox { align-items: flex-start; }
+.ai-panel .checkbox input { flex-shrink: 0; margin-top: 4px; }
+.ai-proposal, .ai-clinical-fields { padding: 16px; background: #fff; border: 1px solid var(--border); border-radius: 16px; }
+.ai-warnings { padding: 16px; background: #fff7e8; border-radius: 14px; }
+.ai-warnings ul { padding-left: 20px; }
+.ai-panel details, .ai-transcript details { font-size: 13px; overflow-wrap: anywhere; }
+.ai-panel summary, .ai-transcript summary { cursor: pointer; }
+.ai-proposal blockquote { margin: 12px 0 0; padding-left: 12px; border-left: 3px solid #b4c9bc; white-space: pre-wrap; }
+.ai-transcript { margin-top: 10px; min-width: 0; }
+.ai-transcript .button { min-height: 36px; padding: 6px 10px; font-size: 12px; white-space: normal; }
+.ai-transcript .pre-wrap { max-height: 320px; overflow: auto; }
+.medicine-catalog, .medicine-results, .ai-reasoning { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.medicine-catalog { padding: 16px; background: var(--surface, #f7f9f7); border: 1px solid var(--border); border-radius: 16px; margin: 16px 0; }
+.medicine-catalog h3 { margin: 0; }
+.medicine-catalog .button, .ai-reasoning .button { white-space: normal; }
+.medicine-catalog a { overflow-wrap: anywhere; }
+.ai-red-flags { border: 1px solid #c76b55; border-radius: 14px; padding: 16px; background: #fff2ed; }

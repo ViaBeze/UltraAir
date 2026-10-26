@@ -1,0 +1,24 @@
+.help-button { color: var(--green); flex-shrink: 0; }
+.tour-start-options { display: grid; gap: 12px; margin: 20px 0; }
+.tour-dialog { position: fixed; inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; padding: 0; margin: 0; border: 0; background: transparent; overflow: hidden; color: var(--ink); }
+.tour-dialog::backdrop { background: transparent; }
+.tour-shade { position: absolute; inset: 0; pointer-events: none; }
+.tour-outline { position: absolute; border: 2px solid #d7f4be; border-radius: 14px; box-shadow: 0 0 0 3px #fff8; pointer-events: none; }
+.tour-card { position: absolute; width: min(380px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); display: flex; flex-direction: column; gap: 14px; padding: 20px; background: #fff; border: 1px solid #dce6d6; border-radius: 22px; box-shadow: 0 14px 60px #10281940; }
+.tour-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
+.tour-card-header .icon-button { width: 32px; height: 32px; min-height: 32px; }
+.tour-card progress { appearance: none; border: 0; width: 100%; height: 4px; flex-shrink: 0; border-radius: 10px; overflow: hidden; background: #edf2e8; }
+.tour-card progress::-webkit-progress-bar { background: #edf2e8; }
+.tour-card progress::-webkit-progress-value { background: var(--green); }
+.tour-card progress::-moz-progress-bar { background: var(--green); }
+.tour-copy { overflow-y: auto; min-height: 0; }
+.tour-copy h2 { margin: 0 0 10px; font-size: 21px; line-height: 1.3; }
+.tour-copy p { margin: 0; font-size: 14px; line-height: 1.6; }
+.tour-copy .small { margin-top: 10px; font-size: 12px; }
+.tour-card select { width: 100%; min-width: 0; flex-shrink: 0; font-size: 12px; padding: 10px; background: #f6f8f3; border: 1px solid var(--border); border-radius: 10px; }
+.tour-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.tour-controls .row { gap: 8px; }
+.tour-controls .button { padding: 9px 12px; min-height: 40px; font-size: 13px; }
+.tour-card :focus-visible { outline: 3px solid #7eae66; outline-offset: 3px; }
+@media (max-width: 420px) { .tour-card { padding: 16px; gap: 12px; } .tour-controls { justify-content: flex-end; } .tour-controls > .button { margin-right: auto; } .topbar-actions { gap: 6px; } .topbar-actions > .button.quiet { padding-left: 8px; padding-right: 8px; } }
+@media (prefers-reduced-motion: reduce) { .tour-dialog *, .tour-dialog *::before, .tour-dialog *::after { animation: none !important; transition: none !important; } }

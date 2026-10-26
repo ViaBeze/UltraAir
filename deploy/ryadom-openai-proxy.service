@@ -1,0 +1,28 @@
+[Unit]
+Description=Ryadom OpenAI outbound proxy
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+LoadCredential=config.json:/etc/ryadom/openai-proxy.json
+ExecStartPre=/opt/ryadom/proxy/xray run -test -config %d/config.json
+ExecStart=/opt/ryadom/proxy/xray run -config %d/config.json
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+CapabilityBoundingSet=
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

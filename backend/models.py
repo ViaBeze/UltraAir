@@ -149,6 +149,16 @@ class VisitCreate(Model):
         return value
 
 
+class ClinicalDraft(Model):
+    """Only reviewed fields are changed on visit confirmation; null preserves a field."""
+    version: int = Field(ge=1)
+    allergy: Text | None = None
+    conditions: Text | None = None
+    medications: Annotated[list[Short], Field(max_length=50)] | None = None
+    note: Text | None = None
+    transfer: Text | None = None
+
+
 class VisitEdit(Model):
     version: int = Field(ge=1)
     title: Short = 'Приём'
@@ -157,8 +167,13 @@ class VisitEdit(Model):
     diagnosis: Text = ''
     plan: Text = ''
     prescriptions: Annotated[list[Prescription], Field(max_length=30)] = []
+    clinicalDraft: ClinicalDraft | None = None
     confirm: bool = False
     cancel: bool = False
+
+
+class MediaDelete(Model):
+    confirm: Literal[True]
 
 
 class MessageCreate(Model):

@@ -107,6 +107,14 @@ def init_db():
           sos_id TEXT REFERENCES sos(id), media_id TEXT REFERENCES media(id),
           created TEXT NOT NULL, read_at TEXT);
         CREATE INDEX IF NOT EXISTS messages_patient ON messages(patient_id,created);
+        CREATE INDEX IF NOT EXISTS messages_media ON messages(media_id);
+        CREATE TABLE IF NOT EXISTS media_sos(
+          media_id TEXT PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
+          sos_id TEXT NOT NULL REFERENCES sos(id));
+        INSERT OR IGNORE INTO media_sos
+          SELECT media_id,sos_id FROM messages WHERE media_id IS NOT NULL AND sos_id IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS pending_media_deletions(
+          media_id TEXT PRIMARY KEY, created TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS notifications(
           id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
           title TEXT NOT NULL, link TEXT NOT NULL, created TEXT NOT NULL, read_at TEXT);
@@ -128,6 +136,16 @@ def init_db():
           id TEXT PRIMARY KEY, actor TEXT NOT NULL REFERENCES users(id),
           action TEXT NOT NULL, entity TEXT NOT NULL, created TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS rate_limits(key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS ai_transcripts(
+          media_id TEXT PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
+          text TEXT NOT NULL, model TEXT NOT NULL, actor TEXT NOT NULL REFERENCES users(id), created TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS ai_visit_drafts(
+          visit_id TEXT PRIMARY KEY REFERENCES visits(id) ON DELETE CASCADE,
+          source TEXT NOT NULL, source_hash TEXT NOT NULL, data TEXT NOT NULL,
+          visit_version INTEGER NOT NULL, patient_version INTEGER NOT NULL,
+          model TEXT NOT NULL, actor TEXT NOT NULL REFERENCES users(id), created TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS ai_locks(key TEXT PRIMARY KEY, token TEXT NOT NULL, expires REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS medicine_search_cache(key TEXT PRIMARY KEY, data TEXT NOT NULL, expires REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS patient_gardens(
           patient_id TEXT PRIMARY KEY REFERENCES patients(id) ON DELETE CASCADE,
           plant TEXT NOT NULL DEFAULT 'cornflower' CHECK(plant IN ('cornflower','cactus','daisy','monstera')),
