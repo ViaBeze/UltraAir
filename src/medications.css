@@ -1,0 +1,16 @@
+.prescription-fields,.reference-fields,.references-editor,.citation-list,.medication-details{display:flex;flex-direction:column;gap:16px;min-width:0}
+.reference-fields,.prescription-editor{border:0;margin:0;min-width:0}
+.reference-fields{padding:0}.prescription-editor legend{font-weight:600;padding:0 4px}
+.references-editor details{border:1px solid var(--border);border-radius:14px;padding:14px}
+.references-editor summary{cursor:pointer;font-weight:500;line-height:1.5}
+.references-editor details[open] summary{margin-bottom:18px}
+.citation{border:1px solid var(--border);border-radius:14px;padding:16px;background:#fff;overflow-wrap:anywhere;display:flex;flex-direction:column;gap:10px}
+.citation blockquote{margin:0;padding:4px 0 4px 14px;border-left:3px solid #9db6a7;white-space:pre-wrap}
+.citation a,.references-editor a{color:var(--green-dark,#395b47);text-decoration:underline;font-size:13px}
+.citation .button{padding:4px 8px;min-height:32px}.references-editor h3{font-size:16px}
+.medication-details .detail{margin:0}.medication-details .detail p{white-space:pre-wrap}
+.prescription-summary{display:flex;flex-direction:column;gap:12px;padding:16px 0;border-bottom:1px solid var(--border)}
+.prescription-summary:last-child{border-bottom:0}.prescription-summary summary{cursor:pointer}
+.patient-heading-actions{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}
+@media(max-width:600px){.patient-heading-actions{width:100%;margin:0}.patient-heading-actions .button{flex:1}.citation{padding:12px}}
+.patient-card-layout .card-heading{flex-wrap:wrap}.patient-card-layout .card-heading .text-link{flex-shrink:1}

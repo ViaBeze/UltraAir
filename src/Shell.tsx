@@ -6,8 +6,8 @@ import { dateTime, initials, useAction, useApp } from './state';
 import { PhoneNotificationNotice } from './Notifications';
 import { CalmingCircle } from './SosCalm';
 import { useTour } from './Tour';
-const patientNav: [string,string,IconName][] = [['today','Сегодня','home'],['diary','Дневник','diary'],['plan','План','pill'],['dynamics','Динамика','chart'],['messages','Сообщения','chat']];
-const doctorNav: [string,string,IconName][] = [['overview','Обзор','home'],['patients','Пациенты','people'],['appointments','Приёмы','calendar'],['messages','Сообщения','chat']];
+const patientNav: [string,string,IconName][] = [['today','Сегодня','home'],['diary','Дневник','diary'],['plan','План','pill'],['dynamics','Динамика','chart'],['messages','Сообщения','chat'],['pharmacy','Аптека','pharmacy']];
+const doctorNav: [string,string,IconName][] = [['overview','Обзор','home'],['patients','Пациенты','people'],['appointments','Приёмы','calendar'],['messages','Сообщения','chat'],['pharmacy','Аптека','pharmacy']];
 export function SosSlider({ onComplete, disabled = false }: { onComplete: () => void; disabled?: boolean }) {
  const [value, setValue] = useState(0); const progress = useRef(0); const dragging = useRef(false);
  function change(value: number) { progress.current = value; setValue(value); }

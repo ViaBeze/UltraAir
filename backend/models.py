@@ -2,6 +2,7 @@ from datetime import date, datetime
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from .reference_rules import source_url
 
 Short = Annotated[str, Field(max_length=200)]
 Text = Annotated[str, Field(max_length=10000)]
@@ -76,6 +77,27 @@ class ProfileUpdate(Model):
         return value
 
 
+class Citation(Model):
+    source: Literal['РЛС', 'Видаль', 'ГРЛС', 'Минздрав', 'МКБ-10', 'Cochrane', 'Тюльпин']
+    title: Annotated[str, Field(min_length=1, max_length=300)]
+    url: Annotated[str, Field(max_length=2000)] = ''
+    section: Annotated[str, Field(min_length=1, max_length=300)]
+    quote: Annotated[str, Field(min_length=1, max_length=2500)]
+    target: Literal['general', 'dose', 'indication', 'sideEffects', 'interactions'] = 'general'
+
+    @model_validator(mode='after')
+    def reference(self):
+        if self.source == 'Тюльпин':
+            if self.url:
+                raise ValueError('Для учебника укажите издание и страницу без внешней ссылки')
+        elif not source_url(self.url, self.source):
+            raise ValueError('Нужна HTTPS-ссылка на выбранный источник')
+        return self
+
+
+Citations = Annotated[list[Citation], Field(max_length=20)]
+
+
 class Clinical(Model):
     version: int = Field(ge=1)
     diagnosis: Text = ''
@@ -85,6 +107,7 @@ class Clinical(Model):
     conditions: Text = ''
     note: Text = ''
     transfer: Text = ''
+    citations: Citations = []
 
 
 class Diary(Model):
@@ -123,6 +146,10 @@ class Prescription(Model):
     name: Annotated[str, Field(min_length=1, max_length=200)]
     dose: Annotated[str, Field(min_length=1, max_length=200)]
     instructions: Annotated[str, Field(max_length=2000)] = ''
+    indication: Annotated[str, Field(max_length=2000)] = ''
+    sideEffects: Annotated[str, Field(max_length=3000)] = ''
+    interactions: Annotated[str, Field(max_length=3000)] = ''
+    citations: Citations = []
     times: Annotated[list[Time], Field(min_length=1, max_length=8)]
     start: date
     end: date | None = None
@@ -134,6 +161,15 @@ class Prescription(Model):
         if len(set(self.times)) != len(self.times):
             raise ValueError('Время приёма повторяется')
         return self
+
+
+class PrescriptionEdit(Prescription):
+    id: Annotated[str, Field(max_length=80)] | None = None
+
+
+class PrescriptionsUpdate(Model):
+    version: int = Field(ge=1)
+    prescriptions: Annotated[list[PrescriptionEdit], Field(max_length=30)]
 
 
 class VisitCreate(Model):
@@ -161,12 +197,14 @@ class ClinicalDraft(Model):
 
 class VisitEdit(Model):
     version: int = Field(ge=1)
+    patientVersion: int | None = Field(default=None, ge=1)
     title: Short = 'Приём'
     notes: Text = ''
     observation: Text = ''
     diagnosis: Text = ''
     plan: Text = ''
     prescriptions: Annotated[list[Prescription], Field(max_length=30)] = []
+    citations: Citations = []
     clinicalDraft: ClinicalDraft | None = None
     confirm: bool = False
     cancel: bool = False

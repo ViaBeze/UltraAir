@@ -12,7 +12,7 @@ from fastapi import FastAPI, Depends, HTTPException, Request, Response, UploadFi
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, FileResponse
 from . import models as m
-from . import push, garden, ai, medicines
+from . import push, garden, ai, medicines, references, pharmacies
 from .db import DATA, init_db, get_db, transaction, dump, uid, now, audit, notify
 from .auth import (PUBLIC_URL, SECURE, COOKIE, SIGNUP, ALLOWED_ORIGINS, HASHER,
                    current_user, doctor, patient, public_user, auth_limit,
@@ -77,7 +77,7 @@ def serialize_patient(db, row, is_doctor):
 def serialize_visit(row, is_doctor):
     data = json.loads(row['data'])
     if not is_doctor:
-        data = {k: data[k] for k in ('title', 'diagnosis', 'plan', 'prescriptions') if k in data} if row['confirmed'] else {'title': data.get('title', 'Приём')}
+        data = {k: data[k] for k in ('title', 'diagnosis', 'plan', 'prescriptions', 'citations') if k in data} if row['confirmed'] else {'title': data.get('title', 'Приём')}
     return dict(id=row['id'], patientId=row['patient_id'], scheduled=row['scheduled'], status=row['status'],
                 version=row['version'], confirmed=row['confirmed'], created=row['created'], updated=row['updated'], **data)
 
@@ -161,6 +161,8 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 app.include_router(push.router)
 app.include_router(ai.router)
 app.include_router(medicines.router)
+app.include_router(references.router)
+app.include_router(pharmacies.router)
 
 
 @app.middleware('http')
@@ -332,12 +334,38 @@ def patient_profile(patient_id: str, data: m.ProfileUpdate, user=Depends(doctor)
 
 @app.put('/api/patients/{patient_id}/clinical')
 def clinical(patient_id: str, data: m.Clinical, user=Depends(doctor), db=Depends(get_db, scope='function')):
-    patient_row(db, user, patient_id)
+    p = patient_row(db, user, patient_id)
+    values = {**json.loads(p['clinical']), **data.model_dump(exclude={'version'}, exclude_unset=True)}
     changed = db.execute('UPDATE patients SET clinical=?,version=version+1,updated=? WHERE id=? AND version=?',
-                         (dump(data.model_dump(exclude={'version'})), now(), patient_id, data.version)).rowcount
+                         (dump(values), now(), patient_id, data.version)).rowcount
     if not changed:
         raise HTTPException(409, 'Карточка изменилась в другой вкладке. Обновите страницу и повторите изменение.')
     audit(db, user['id'], 'clinical_updated', patient_id)
+    return {'ok': True}
+
+
+@app.put('/api/patients/{patient_id}/prescriptions')
+def edit_prescriptions(patient_id: str, data: m.PrescriptionsUpdate, user=Depends(doctor), db=Depends(get_db, scope='function')):
+    p = patient_row(db, user, patient_id)
+    active = {row['id']: row for row in db.execute('SELECT * FROM prescriptions WHERE patient_id=? AND active=1', (patient_id,))}
+    ids = [item.id for item in data.prescriptions if item.id]
+    if len(ids) != len(set(ids)) or any(key not in active for key in ids):
+        raise HTTPException(409, 'Назначения изменились. Обновите карточку перед сохранением.')
+    changed = db.execute('UPDATE patients SET version=version+1,updated=? WHERE id=? AND version=?',
+                         (now(), patient_id, data.version)).rowcount
+    if not changed:
+        raise HTTPException(409, 'Карточка изменилась. Обновите страницу, сохранив свой текст.')
+    retained = set()
+    for item in data.prescriptions:
+        value = item.model_dump(mode='json', exclude={'id'})
+        if item.id and m.Prescription.model_validate_json(active[item.id]['data']).model_dump(mode='json') == value:
+            retained.add(item.id)
+            continue
+        db.execute('INSERT INTO prescriptions VALUES(?,?,NULL,?,1,?)', (uid(), patient_id, dump(value), now()))
+    for key in active.keys() - retained:
+        db.execute('UPDATE prescriptions SET active=0 WHERE id=?', (key,))
+    audit(db, user['id'], 'prescriptions_updated_from_card', patient_id)
+    notify(db, p['user_id'], 'Врач обновил назначения в карточке', '/patient/plan')
     return {'ok': True}
 
 
@@ -384,8 +412,9 @@ def create_visit(data: m.VisitCreate, user=Depends(doctor), db=Depends(get_db, s
     p = patient_row(db, user, data.patientId)
     visit_id = uid()
     scheduled = data.scheduled.astimezone(timezone.utc).isoformat()
+    prescriptions = [json.loads(row['data']) for row in db.execute('SELECT data FROM prescriptions WHERE patient_id=? AND active=1', (p['id'],))]
     db.execute('INSERT INTO visits(id,patient_id,scheduled,data,created,updated) VALUES(?,?,?,?,?,?)',
-               (visit_id, p['id'], scheduled, dump({'title': data.title}), now(), now()))
+               (visit_id, p['id'], scheduled, dump({'title': data.title, 'prescriptions': prescriptions, 'patientVersion': p['version']}), now(), now()))
     notify(db, p['user_id'], 'Врач запланировал приём', '/patient/plan')
     audit(db, user['id'], 'visit_created', visit_id)
     return {'id': visit_id}
@@ -400,13 +429,25 @@ def edit_visit(visit_id: str, data: m.VisitEdit, user=Depends(doctor), db=Depend
         raise HTTPException(422, 'Заполните план перед подтверждением')
     if data.confirm and data.cancel:
         raise HTTPException(422, 'Выберите одно действие')
+    # Only a prescription snapshot or an explicitly reviewed card version can
+    # protect the plan. A clinicalDraft version covers different medical fields.
+    patient_version_at_open = (data.patientVersion if data.patientVersion is not None else
+                               json.loads(v['data']).get('patientVersion'))
+    if data.confirm:
+        if patient_version_at_open is None:
+            raise HTTPException(409, 'В старом черновике нет версии назначений. Откройте приём и загрузите актуальные назначения из карточки.')
+        p = patient_row(db, user, v['patient_id'])
+        if p['version'] != patient_version_at_open:
+            raise HTTPException(409, 'Карточка изменилась после открытия приёма. Загрузите и проверьте актуальные назначения.')
     if data.confirm and data.clinicalDraft:
         p = patient_row(db, user, v['patient_id'])
         if p['version'] != data.clinicalDraft.version:
             raise HTTPException(409, 'Медкарта изменилась. Повторно проверьте изменения карточки перед подтверждением.')
     status = 'confirmed' if data.confirm else 'cancelled' if data.cancel else 'draft'
+    saved = data.model_dump(mode='json', exclude={'version', 'confirm', 'cancel'})
+    saved['patientVersion'] = patient_version_at_open
     changed = db.execute('UPDATE visits SET data=?,status=?,version=version+1,updated=?,confirmed=? WHERE id=? AND version=?',
-                         (dump(data.model_dump(mode='json', exclude={'version', 'confirm', 'cancel'})), status, now(), now() if data.confirm else None, visit_id, data.version)).rowcount
+                         (dump(saved), status, now(), now() if data.confirm else None, visit_id, data.version)).rowcount
     if not changed:
         raise HTTPException(409, 'Приём изменился в другой вкладке. Обновите страницу, сохранив свой текст.')
     if data.confirm:
@@ -420,7 +461,15 @@ def edit_visit(visit_id: str, data: m.VisitEdit, user=Depends(doctor), db=Depend
             clinical.update(data.clinicalDraft.model_dump(exclude={'version'}, exclude_none=True))
         clinical['diagnosis'] = data.diagnosis or clinical.get('diagnosis', '')
         clinical['treatment'] = data.plan
-        patient_version = data.clinicalDraft.version if data.clinicalDraft else p['version']
+        citations = clinical.get('citations', [])
+        for citation in data.citations:
+            value = citation.model_dump()
+            if value not in citations:
+                citations.append(value)
+        if len(citations) > 20:
+            raise HTTPException(422, 'В карточке слишком много цитат. Удалите неактуальные ссылки перед подтверждением.')
+        clinical['citations'] = citations
+        patient_version = patient_version_at_open
         changed = db.execute('UPDATE patients SET clinical=?,version=version+1,updated=? WHERE id=? AND version=?',
                              (dump(clinical), now(), p['id'], patient_version)).rowcount
         if not changed:

@@ -85,7 +85,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS visits_patient ON visits(patient_id,scheduled);
         CREATE TABLE IF NOT EXISTS prescriptions(
           id TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(id),
-          visit_id TEXT NOT NULL REFERENCES visits(id), data TEXT NOT NULL,
+          visit_id TEXT REFERENCES visits(id), data TEXT NOT NULL,
           active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS medicine_marks(
           id TEXT PRIMARY KEY, prescription_id TEXT NOT NULL REFERENCES prescriptions(id),
@@ -167,6 +167,22 @@ def init_db():
                           SELECT patient_id,'medicine:' || prescription_id || ':' || day || ':' || slot,1,updated
                           FROM medicine_marks WHERE status='taken' ''')
             db.execute('INSERT INTO schema_version VALUES(2)')
+    # Existing prescriptions and their marks keep their IDs. A card prescription
+    # has no visit; SQLite needs a table rebuild to remove the old NOT NULL.
+    with transaction() as db:
+        db.execute('PRAGMA foreign_keys=OFF')
+        db.execute('BEGIN IMMEDIATE')
+        if next(r for r in db.execute('PRAGMA table_info(prescriptions)') if r['name'] == 'visit_id')['notnull']:
+            db.execute('''CREATE TABLE prescriptions_new(
+                id TEXT PRIMARY KEY, patient_id TEXT NOT NULL REFERENCES patients(id),
+                visit_id TEXT REFERENCES visits(id), data TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL)''')
+            db.execute('INSERT INTO prescriptions_new SELECT * FROM prescriptions')
+            db.execute('DROP TABLE prescriptions')
+            db.execute('ALTER TABLE prescriptions_new RENAME TO prescriptions')
+        if db.execute('PRAGMA foreign_key_check').fetchone():
+            raise RuntimeError('Prescription migration failed its foreign-key check')
+        db.execute('INSERT OR IGNORE INTO schema_version VALUES(3)')
     os.chmod(DATA / 'ryadom.sqlite3', 0o600)
 
 

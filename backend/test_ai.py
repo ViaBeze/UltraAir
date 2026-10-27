@@ -162,7 +162,10 @@ def test_clinical_draft_is_saved_privately_and_applied_only_on_confirmation(clie
     assert not snapshot(doc)['patients'][0].get('allergy')
     assert 'clinicalDraft' not in snapshot(pat)['visits'][0]
     assert 'Проверенная аллергия' not in json.dumps(snapshot(pat), ensure_ascii=False)
-    assert doc.put(f'/api/visits/{v}', json={**data, 'version': 2, 'confirm': True}).status_code == 200
+    # Clinical fields were reviewed, but the prescription snapshot still predates
+    # the card edit. Confirmation also requires reviewing that current snapshot.
+    assert doc.put(f'/api/visits/{v}', json={**data, 'version': 2, 'confirm': True}).status_code == 409
+    assert doc.put(f'/api/visits/{v}', json={**data, 'version': 2, 'patientVersion': 2, 'confirm': True}).status_code == 200
     card = snapshot(doc)['patients'][0]
     assert card['allergy'] == 'Проверенная аллергия'
     assert card['conditions'] == 'Старые сведения' and card['note'] == 'Старая заметка'
